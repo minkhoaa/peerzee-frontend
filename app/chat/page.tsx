@@ -22,6 +22,7 @@ interface Conversation {
     lastMessageAt: string | null;
     lastSeq: string;
     name?: string;
+    lastMessage?: string;
 }
 
 export default function ChatPage() {
@@ -67,6 +68,8 @@ export default function ChatPage() {
                     return prev;
                 return [...prev, data];
             });
+            setConversations(prev => prev.map(c => c.id === data.conversation_id ?
+                { ...c, lastMessage: data.body, lastMessageAt: data.createdAt } : c))
         });
         socket.on('conversation:new', (data) => {
             console.log("Received conversation", data);
@@ -170,7 +173,13 @@ export default function ChatPage() {
                             onClick={() => { handleSelectConversation(c); }}
                             className={`px-4 py-3 cursor-pointer transition-colors ${activeConversation?.id === c.id ? "bg-gray-100" : "hover:bg-gray-50"}`}
                         >
-                            <span className="text-sm font-medium text-gray-800">{c.name}</span>
+                            <div className="flex flex-col">
+                                <span className="text-sm font-medium text-gray-800">{c.name}</span>
+                                <div className="flex justify-between">
+                                    <span className="text-xs  text-gray-500">{c.lastMessage}</span>
+                                    <span className="text-xs text-gray-500">{c.lastMessageAt ? new Date(c.lastMessageAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : ""}</span>
+                                </div>
+                            </div>
                         </div>
                     ))}
                 </div>
@@ -190,11 +199,11 @@ export default function ChatPage() {
 
                         <div className="flex-1 overflow-y-auto p-6 flex flex-col">
                             {messages.map((m) => (
-                                <div key={m.id} className={`mb-3 flex ${m.sender_id === userId ? "justify-end" : "justify-start"}`}>
+                                <div key={m.id} className={`mb-3 flex flex-col ${m.sender_id === userId ? "items-end" : "items-start"}`}>
                                     <span className={`inline-block px-4 py-2.5 rounded-2xl text-sm ${m.sender_id === userId ? "bg-gray-800 text-white" : "bg-white text-gray-800 border border-gray-200"}`}>
                                         {m.body}
                                     </span>
-                                    <span className="text-xs text-gray-400 mt-1">{new Date(m.createdAt).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>
+                                    <span className="text-xs text-gray-400 mt-1">{new Date(m.createdAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>
                                 </div>
                             ))}
                             <div ref={messagesEndRef} />
