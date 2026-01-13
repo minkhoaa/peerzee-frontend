@@ -3,7 +3,6 @@ import type { LoginDto, LoginResponse, RegisterDto, RegisterResponse, UpdateUser
 import { Conversation } from "@/types/conversation";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:9000";
-
 const api = axios.create({
     baseURL: API_URL,
     headers: {

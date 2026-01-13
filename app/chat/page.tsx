@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, use } from "react";
+import React, { useState, useEffect, useRef, useCallback, use } from "react";
 import { useRouter } from "next/navigation";
 import { Socket } from "socket.io-client";
 import { connectSocket, disconnectSocket } from "@/lib/socket";
@@ -17,6 +17,10 @@ interface Message {
     isEdited?: boolean;
     isDeleted?: boolean;
     reactions?: { emoji: string, user_id: string }[];
+    readAt?: string | null;
+    fileUrl?: string;
+    fileName?: string;
+    fileType?: string;
 }
 
 interface Conversation {
@@ -53,8 +57,11 @@ export default function ChatPage() {
     const [searchQuery, setSearchQuery] = useState("");
     const [searchResults, setSearchResults] = useState<{ id: string, email: string, fullName?: string }[]>([]);
     const [searching, setSearching] = useState(false);
-    const [openEmojiPickerId, setOpenEmojiPickerId] = useState<string | null>(null);
-
+    const [openEmojiPickerId, setOpenEmojiPickerId] = useState<string | null>
+        (null);
+    const [selectedFile, setSelectedFile] = useState<File | null>(null);
+    const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
     // Close emoji picker and menu when clicking outside
     useEffect(() => {
         const handleClickOutside = () => {
@@ -185,6 +192,12 @@ export default function ChatPage() {
             ))
         })
 
+        socket.on('message:read', (data: { message_id: string; readAt: string; readBy: string }) => {
+            setMessages(prev => prev.map(m =>
+                m.id === data.message_id ? { ...m, readAt: data.readAt } : m
+            ))
+        })
+
         setLoading(false);
         return () => {
             disconnectSocket();
@@ -219,18 +232,52 @@ export default function ChatPage() {
         }, 1000);
     };
 
+    const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setSelectedFile(file);
+        if (file.type.startsWith("image/")) {
+            const url = URL.createObjectURL(file);
+            setPreviewUrl(url);
+        }
+    }
 
     const handleLogout = () => {
         localStorage.clear();
         router.push("/login");
     };
 
-    const handleSend = (e: React.FormEvent) => {
+    const handleSend = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!newMessage.trim() || !activeConversation || !socketRef.current) return;
+        if (!newMessage.trim() && !selectedFile || !activeConversation || !socketRef.current) return;
+        let fileUrl = null;
+        let fileName = null;
+        let fileType = null;
+        if (selectedFile) {
+            const formData = new FormData();
+            formData.append("file", selectedFile);
+            try {
+                const res = await api.post("/chat/upload", formData, {
+                    headers: {
+                        "Content-Type": undefined
+                    },
+                });
+
+                fileUrl = res.data.fileUrl;
+                fileName = res.data.fileName;
+                fileType = res.data.fileType;
+            } catch (error) {
+                console.log(error);
+                return;
+            }
+        }
+
         socketRef.current.emit("conversation:send", {
             conversation_id: activeConversation.id,
             body: newMessage,
+            fileUrl,
+            fileName,
+            fileType,
         });
         if (typingTimeoutRef.current)
             clearTimeout(typingTimeoutRef.current);
@@ -240,6 +287,8 @@ export default function ChatPage() {
             conversation_id: activeConversation.id
         })
         setNewMessage("");
+        setSelectedFile(null);
+        setPreviewUrl(null);
     };
     const handleEdit = (m: Message) => {
         if (!activeConversation || !socketRef.current) return;
@@ -348,6 +397,16 @@ export default function ChatPage() {
         socketRef.current?.emit("conversation:join", { conversation_id: conv.id },
             (messages: Message[]) => {
                 setMessages(messages || []);
+
+                if (messages && messages.length > 0) {
+                    const lastMessage = messages[messages.length - 1];
+                    if (lastMessage.sender_id !== userId && !lastMessage.readAt) {
+                        socketRef.current?.emit("message:read", {
+                            conversation_id: conv.id,
+                            last_read_message_id: lastMessage.id
+                        });
+                    }
+                }
             });
     };
 
@@ -478,34 +537,24 @@ export default function ChatPage() {
                                             ) : (
                                                 <div className={`group flex items-end gap-2 ${m.sender_id === userId ? "flex-row-reverse" : "flex-row"}`}>
                                                     {/* Message bubble - Messenger style with grouping */}
-                                                    <div className={`relative max-w-[75%] break-words px-4 py-2 ${getBubbleRadius()} ${m.sender_id === userId ? "bg-neutral-900 text-white" : "bg-gray-100 text-gray-800"}`}>
-                                                        <p className="break-words whitespace-pre-wrap">{m.body}</p>
+                                                    {/* Bubble container */}
+                                                    <div className={`relative max-w-[75%] ${getBubbleRadius()} ${m.sender_id === userId ? "bg-neutral-900 text-white" : "bg-gray-100 text-gray-800"}`}>
 
-                                                        {/* Only show timestamp on last message of group */}
-                                                        {isLastInGroup && (
-                                                            <div className={`flex items-center gap-1 mt-1 ${m.sender_id === userId ? "justify-end" : "justify-start"}`}>
-                                                                {m.isEdited && (
-                                                                    <span className="text-[10px] opacity-50">(edited)</span>
-                                                                )}
-                                                                <span className="text-[10px] opacity-50">
-                                                                    {new Date(m.createdAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
-                                                                </span>
-                                                            </div>
+                                                        {/* Ảnh - hiển thị trước, full width, không padding */}
+                                                        {m.fileUrl && m.fileType?.startsWith('image/') && (
+                                                            <img
+                                                                src={`http://localhost:9000${m.fileUrl}`}
+                                                                alt={m.fileName || 'Image'}
+                                                                className="w-full rounded-t-2xl object-cover max-h-64"
+                                                            />
                                                         )}
 
-                                                        {/* Reactions - only on last message or if has reactions */}
-                                                        {m.reactions && m.reactions.length > 0 && (
-                                                            <div className="absolute -bottom-3 left-2 flex gap-0.5 bg-white rounded-full px-1.5 py-0.5 shadow-sm border border-gray-100">
-                                                                {['👍', '❤️', '😂', '😮', '😢'].map(emoji => {
-                                                                    const count = m.reactions?.filter(r => r.emoji === emoji).length || 0;
-                                                                    return count > 0 ? (
-                                                                        <button key={emoji} onClick={() => handleReaction(m.id, emoji)} className="text-xs hover:scale-110 transition-transform">
-                                                                            {emoji}{count > 1 ? <span className="text-[10px] ml-0.5">{count}</span> : ''}
-                                                                        </button>
-                                                                    ) : null;
-                                                                })}
-                                                            </div>
+                                                        {/* Text body - có padding */}
+                                                        {m.body && (
+                                                            <p className="px-4 py-2 wrap-break-word whitespace-pre-wrap">{m.body}</p>
                                                         )}
+
+                                                        {/* Timestamp... */}
                                                     </div>
 
                                                     {/* Action button + Emoji picker */}
@@ -578,8 +627,32 @@ export default function ChatPage() {
                                 <div ref={messagesEndRef} />
                             </div>
                             <TypingIndicator />
+                            {/* Preview bar - trước form */}
+                            {selectedFile && (
+                                <div className="p-2 border-t bg-gray-50 flex items-center gap-2">
+                                    {previewUrl && (
+                                        <img src={previewUrl} alt="Preview" className="h-12 w-12 object-cover rounded" />
+                                    )}
+                                    <span className="text-sm text-gray-600 flex-1 truncate">{selectedFile.name}</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => { setSelectedFile(null); setPreviewUrl(null); }}
+                                        className="text-gray-400 hover:text-red-500"
+                                    >
+                                        ✕
+                                    </button>
+                                </div>
+                            )}
                             <form onSubmit={handleSend} className="shrink-0 w-full border-t border-gray-100 bg-white p-4 box-border">
                                 <div className="w-full flex items-center gap-2 bg-gray-100 rounded-full px-4 py-3">
+                                    <input
+                                        type="file"
+                                        ref={fileInputRef}
+                                        hidden
+                                        onChange={handleFileSelect}
+                                        className="hidden"
+                                    />
+                                    <button type="button" onClick={() => fileInputRef.current?.click()}>📎</button>
                                     <input
                                         value={newMessage}
                                         onChange={handleInputChange}
